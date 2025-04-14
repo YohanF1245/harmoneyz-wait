@@ -16,6 +16,8 @@ on:
 env:
   # Version de l'image avec date pour le traçage
   IMAGE_VERSION: ${{ github.sha }}
+  # Utiliser l'utilisateur debian du VPS
+  VPS_USER: debian
 
 jobs:
   deploy:
@@ -56,12 +58,11 @@ jobs:
 
       - name: Copy files to VPS and deploy
         env:
-          VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
           # Copier l'archive vers le VPS
           echo "Transfert de l'archive vers le VPS..."
-          scp -o ConnectTimeout=30 harmoneyz-deploy.tar.gz $VPS_USER@$VPS_HOST:~/
+          scp -o ConnectTimeout=30 harmoneyz-deploy.tar.gz $VPS_USER@${{ secrets.VPS_HOST }}:~/
           
           # Vérifier que le transfert a réussi
           if [ $? -ne 0 ]; then
@@ -71,7 +72,7 @@ jobs:
 
           # Exécuter le script de déploiement sur le VPS
           echo "Lancement du déploiement sur le VPS..."
-          ssh -o ConnectTimeout=30 $VPS_USER@$VPS_HOST << 'EOF'
+          ssh -o ConnectTimeout=30 $VPS_USER@${{ secrets.VPS_HOST }} << 'EOF'
             set -e  # Arrêter le script en cas d'erreur
             
             # En cas d'erreur, nettoyer et sortir
@@ -101,9 +102,21 @@ jobs:
               exit 1
             fi
             
+            # Vérifier et ajouter les permissions Docker si nécessaire
+            if ! groups | grep -q docker; then
+              echo "L'utilisateur actuel n'est pas dans le groupe docker."
+              echo "Exécution de docker avec sudo..."
+              DOCKER_CMD="sudo docker"
+              COMPOSE_PREFIX="sudo"
+            else
+              echo "L'utilisateur actuel est dans le groupe docker."
+              DOCKER_CMD="docker"
+              COMPOSE_PREFIX=""
+            fi
+            
             # Construire l'image Docker localement
             echo "Construction de l'image Docker..."
-            docker build -t harmoneyz:latest . || {
+            $DOCKER_CMD build -t harmoneyz:latest . || {
               echo "Erreur lors de la construction de l'image Docker."
               exit 1
             }
@@ -143,17 +156,17 @@ jobs:
             if command -v docker compose &> /dev/null; then
               # Docker Compose V2
               echo "Utilisation de Docker Compose V2"
-              COMPOSE_CMD="docker compose"
+              COMPOSE_CMD="${COMPOSE_PREFIX} docker compose"
             elif command -v docker-compose &> /dev/null; then
               # Docker Compose V1
               echo "Utilisation de Docker Compose V1"
-              COMPOSE_CMD="docker-compose"
+              COMPOSE_CMD="${COMPOSE_PREFIX} docker-compose"
             else
               # Installation de Docker Compose
               echo "Installation de Docker Compose..."
               sudo curl -L "https://github.com/docker/compose/releases/download/v2.20.3/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
               sudo chmod +x /usr/local/bin/docker-compose
-              COMPOSE_CMD="docker-compose"
+              COMPOSE_CMD="${COMPOSE_PREFIX} docker-compose"
             fi
             
             # Arrêter les conteneurs existants
@@ -179,7 +192,7 @@ jobs:
             
             # Nettoyer les images Docker inutilisées
             echo "Nettoyage des images Docker inutilisées..."
-            docker image prune -af --filter "until=24h" || true
+            $DOCKER_CMD image prune -af --filter "until=24h" || true
             
             # Afficher l'espace disque disponible
             echo "Espace disque restant:"
