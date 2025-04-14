@@ -1,6 +1,6 @@
 # Guide de déploiement Harmoneyz sur VPS OVH (Debian)
 
-Ce guide vous explique comment configurer votre VPS OVH sous Debian et mettre en place un déploiement automatique avec GitHub Actions pour votre application Harmoneyz, **sans utiliser Docker Hub**.
+Ce guide vous explique comment configurer votre VPS OVH sous Debian et mettre en place un déploiement automatique avec GitHub Actions pour votre application Harmoneyz, **sans utiliser Docker Hub pour héberger vos images**.
 
 ## Table des matières
 
@@ -16,6 +16,7 @@ Ce guide vous explique comment configurer votre VPS OVH sous Debian et mettre en
 - Un compte OVH avec un VPS sous Debian (recommandé : au moins 2 Go de RAM)
 - Un nom de domaine (facultatif, mais recommandé)
 - Un compte GitHub
+- Un compte Docker Hub (facultatif mais recommandé pour éviter les limites de téléchargement)
 
 ## Configuration du VPS OVH
 
@@ -177,6 +178,18 @@ Dans votre dépôt GitHub, allez dans Settings > Secrets > Actions et ajoutez le
 - `SSH_PRIVATE_KEY` : contenu de votre clé privée `~/.ssh/github_actions_deploy`
 - `VPS_HOST` : adresse IP ou nom d'hôte de votre VPS
 
+Si vous souhaitez éviter les erreurs de limite de taux Docker Hub (429 Too Many Requests), ajoutez également ces secrets :
+
+- `DOCKERHUB_USERNAME` : votre nom d'utilisateur Docker Hub
+- `DOCKERHUB_TOKEN` : votre jeton d'accès personnel Docker Hub
+
+Pour créer un jeton Docker Hub :
+1. Connectez-vous à Docker Hub
+2. Allez dans Account Settings > Security > New Access Token
+3. Donnez un nom significatif à votre jeton (ex: "GitHub Actions")
+4. Choisissez les permissions appropriées (Read-only access)
+5. Copiez le jeton généré et ajoutez-le dans les secrets GitHub
+
 > **Note:** L'utilisateur "debian" est configuré directement dans le workflow et n'a pas besoin d'être défini comme secret.
 
 ## Premier déploiement
@@ -261,4 +274,12 @@ sudo docker-compose up -d --force-recreate
 4. **Erreurs Docker**
    - Vérifiez l'espace disque disponible : `df -h`
    - Nettoyez les images non utilisées : `docker system prune -a` ou `sudo docker system prune -a`
-   - Redémarrez Docker si nécessaire : `sudo systemctl restart docker` 
+   - Redémarrez Docker si nécessaire : `sudo systemctl restart docker`
+
+5. **Erreur "429 Too Many Requests" de Docker Hub**
+   - Cette erreur indique que vous avez atteint la limite de téléchargement non authentifié de Docker Hub
+   - Solutions :
+     - Configurez les secrets `DOCKERHUB_USERNAME` et `DOCKERHUB_TOKEN` dans GitHub
+     - Connectez-vous manuellement à Docker Hub sur votre VPS : `docker login`
+     - Préchargez les images nécessaires sur votre VPS : `docker pull nginx:alpine && docker pull node:18-alpine`
+     - Utilisez un registre Docker alternatif comme GitHub Container Registry 

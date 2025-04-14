@@ -59,6 +59,8 @@ jobs:
       - name: Copy files to VPS and deploy
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME || '' }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN || '' }}
         run: |
           # Copier l'archive vers le VPS
           echo "Transfert de l'archive vers le VPS..."
@@ -72,7 +74,10 @@ jobs:
 
           # Exécuter le script de déploiement sur le VPS
           echo "Lancement du déploiement sur le VPS..."
-          ssh -o ConnectTimeout=30 $VPS_USER@${{ secrets.VPS_HOST }} << 'EOF'
+          DOCKER_USERNAME="${DOCKERHUB_USERNAME}"
+          DOCKER_TOKEN="${DOCKERHUB_TOKEN}"
+          
+          ssh -o ConnectTimeout=30 $VPS_USER@${{ secrets.VPS_HOST }} << EOF
             set -e  # Arrêter le script en cas d'erreur
             
             # En cas d'erreur, nettoyer et sortir
@@ -114,12 +119,37 @@ jobs:
               COMPOSE_PREFIX=""
             fi
             
+            # Login à Docker Hub si des identifiants sont fournis
+            if [ -n "${DOCKER_USERNAME}" ] && [ -n "${DOCKER_TOKEN}" ]; then
+              echo "Connexion à Docker Hub..."
+              echo "${DOCKER_TOKEN}" | \${DOCKER_CMD} login -u "${DOCKER_USERNAME}" --password-stdin
+              DOCKER_LOGIN_SUCCESS=true
+            else
+              echo "Aucun identifiant Docker Hub fourni. Utilisation des images en mode non authentifié."
+              DOCKER_LOGIN_SUCCESS=false
+            fi
+            
+            # Modifier le Dockerfile pour utiliser des images alternatives si pas connecté à Docker Hub
+            if [ "\${DOCKER_LOGIN_SUCCESS}" != "true" ]; then
+              echo "Modification du Dockerfile pour éviter les limites de téléchargement..."
+              # Utiliser Nginx de DockerHub Official Images Mirror
+              sed -i 's|FROM nginx:alpine|FROM mirror.gcr.io/library/nginx:alpine|g' Dockerfile
+              # Utiliser Node de DockerHub Official Images Mirror
+              sed -i 's|FROM node:18-alpine|FROM mirror.gcr.io/library/node:18-alpine|g' Dockerfile
+            fi
+            
             # Construire l'image Docker localement
             echo "Construction de l'image Docker..."
-            $DOCKER_CMD build -t harmoneyz:latest . || {
+            \${DOCKER_CMD} build -t harmoneyz:latest . || {
               echo "Erreur lors de la construction de l'image Docker."
               exit 1
             }
+            
+            # Déconnexion de Docker Hub après la construction
+            if [ "\${DOCKER_LOGIN_SUCCESS}" = "true" ]; then
+              echo "Déconnexion de Docker Hub..."
+              \${DOCKER_CMD} logout
+            fi
             
             # Création/mise à jour du fichier docker-compose.yml
             echo "Configuration de docker-compose.yml..."
@@ -156,43 +186,43 @@ jobs:
             if command -v docker compose &> /dev/null; then
               # Docker Compose V2
               echo "Utilisation de Docker Compose V2"
-              COMPOSE_CMD="${COMPOSE_PREFIX} docker compose"
+              COMPOSE_CMD="\${COMPOSE_PREFIX} docker compose"
             elif command -v docker-compose &> /dev/null; then
               # Docker Compose V1
               echo "Utilisation de Docker Compose V1"
-              COMPOSE_CMD="${COMPOSE_PREFIX} docker-compose"
+              COMPOSE_CMD="\${COMPOSE_PREFIX} docker-compose"
             else
               # Installation de Docker Compose
               echo "Installation de Docker Compose..."
-              sudo curl -L "https://github.com/docker/compose/releases/download/v2.20.3/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+              sudo curl -L "https://github.com/docker/compose/releases/download/v2.20.3/docker-compose-\$(uname -s)-\$(uname -m)" -o /usr/local/bin/docker-compose
               sudo chmod +x /usr/local/bin/docker-compose
-              COMPOSE_CMD="${COMPOSE_PREFIX} docker-compose"
+              COMPOSE_CMD="\${COMPOSE_PREFIX} docker-compose"
             fi
             
             # Arrêter les conteneurs existants
             echo "Arrêt des conteneurs existants..."
-            $COMPOSE_CMD down || true
+            \${COMPOSE_CMD} down || true
             
             # Démarrer les nouveaux conteneurs
             echo "Démarrage des nouveaux conteneurs..."
-            $COMPOSE_CMD up -d
+            \${COMPOSE_CMD} up -d
             
             # Vérifier que le déploiement a réussi
             echo "Vérification du déploiement..."
             sleep 10  # Attendre un peu plus longtemps pour que le conteneur démarre complètement
-            if ! $COMPOSE_CMD ps | grep -q "Up"; then
+            if ! \${COMPOSE_CMD} ps | grep -q "Up"; then
               echo "Le déploiement a échoué. Vérifiez les logs:"
-              $COMPOSE_CMD logs
+              \${COMPOSE_CMD} logs
               exit 1
             fi
             
             # Afficher les informations sur les conteneurs en cours d'exécution
             echo "✅ Déploiement terminé avec succès!"
-            $COMPOSE_CMD ps
+            \${COMPOSE_CMD} ps
             
             # Nettoyer les images Docker inutilisées
             echo "Nettoyage des images Docker inutilisées..."
-            $DOCKER_CMD image prune -af --filter "until=24h" || true
+            \${DOCKER_CMD} image prune -af --filter "until=24h" || true
             
             # Afficher l'espace disque disponible
             echo "Espace disque restant:"
