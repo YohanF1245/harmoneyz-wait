@@ -47,11 +47,14 @@ RUN chown -R nginx:nginx /usr/share/nginx/html && \
     mkdir -p /var/cache/nginx /var/log/nginx && \
     chown -R nginx:nginx /var/cache/nginx /var/log/nginx
 
+# Supprimer la directive user de nginx.conf pour éviter les problèmes de permissions
+RUN sed -i '/^user/d' /etc/nginx/nginx.conf
+
+# S'assurer que /var/run est accessible
+RUN mkdir -p /var/run && chmod 755 /var/run
+
 # Exposition du port 80
 EXPOSE 80
-
-# Exécuter en tant qu'utilisateur non-root pour la sécurité
-USER nginx
 
 # Utilisation de HEALTHCHECK pour permettre à Docker de vérifier l'état du conteneur
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
