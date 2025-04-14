@@ -37,7 +37,21 @@ jobs:
 
       - name: Create archive of repository
         run: |
-          tar -czf harmoneyz-deploy.tar.gz --exclude='.git' --exclude='node_modules' .
+          # Vérifier que rsync est installé
+          if ! command -v rsync &> /dev/null; then
+            echo "Installation de rsync..."
+            sudo apt-get update && sudo apt-get install -y rsync
+          fi
+          
+          # Créer un répertoire temporaire et y copier les fichiers pour éviter les erreurs de fichiers modifiés
+          echo "Création de l'archive pour le déploiement..."
+          TEMP_DIR=$(mktemp -d)
+          rsync -a --quiet --exclude='.git' --exclude='node_modules' --exclude='.github' . "$TEMP_DIR"
+          cd "$TEMP_DIR"
+          tar -czf "$GITHUB_WORKSPACE/harmoneyz-deploy.tar.gz" .
+          cd "$GITHUB_WORKSPACE"
+          rm -rf "$TEMP_DIR"
+          echo "Archive créée avec succès:"
           ls -lah harmoneyz-deploy.tar.gz
 
       - name: Copy files to VPS and deploy
@@ -46,17 +60,36 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
           # Copier l'archive vers le VPS
-          scp harmoneyz-deploy.tar.gz $VPS_USER@$VPS_HOST:~/
+          echo "Transfert de l'archive vers le VPS..."
+          scp -o ConnectTimeout=30 harmoneyz-deploy.tar.gz $VPS_USER@$VPS_HOST:~/
+          
+          # Vérifier que le transfert a réussi
+          if [ $? -ne 0 ]; then
+            echo "Erreur lors du transfert de l'archive vers le VPS."
+            exit 1
+          fi
 
           # Exécuter le script de déploiement sur le VPS
-          ssh $VPS_USER@$VPS_HOST << 'EOF'
+          echo "Lancement du déploiement sur le VPS..."
+          ssh -o ConnectTimeout=30 $VPS_USER@$VPS_HOST << 'EOF'
             set -e  # Arrêter le script en cas d'erreur
             
+            # En cas d'erreur, nettoyer et sortir
+            cleanup() {
+              echo "Une erreur s'est produite. Nettoyage..."
+              [ -f ~/harmoneyz-deploy.tar.gz ] && rm ~/harmoneyz-deploy.tar.gz
+              exit 1
+            }
+            
+            trap cleanup ERR
+            
             # Créer répertoire de déploiement s'il n'existe pas
+            echo "Préparation du répertoire de déploiement..."
             mkdir -p ~/harmoneyz
             cd ~/harmoneyz
             
             # Extraire les fichiers de l'archive
+            echo "Extraction des fichiers..."
             tar -xzf ~/harmoneyz-deploy.tar.gz
             
             # Nettoyer l'archive après extraction
@@ -70,9 +103,13 @@ jobs:
             
             # Construire l'image Docker localement
             echo "Construction de l'image Docker..."
-            docker build -t harmoneyz:latest .
+            docker build -t harmoneyz:latest . || {
+              echo "Erreur lors de la construction de l'image Docker."
+              exit 1
+            }
             
             # Création/mise à jour du fichier docker-compose.yml
+            echo "Configuration de docker-compose.yml..."
             cat > docker-compose.yml << 'EOCF'
             version: '3.8'
             
@@ -102,6 +139,7 @@ jobs:
             EOCF
             
             # Déterminer quelle version de Docker Compose utiliser
+            echo "Détection de Docker Compose..."
             if command -v docker compose &> /dev/null; then
               # Docker Compose V2
               echo "Utilisation de Docker Compose V2"
@@ -119,13 +157,16 @@ jobs:
             fi
             
             # Arrêter les conteneurs existants
+            echo "Arrêt des conteneurs existants..."
             $COMPOSE_CMD down || true
             
             # Démarrer les nouveaux conteneurs
+            echo "Démarrage des nouveaux conteneurs..."
             $COMPOSE_CMD up -d
             
             # Vérifier que le déploiement a réussi
-            sleep 5
+            echo "Vérification du déploiement..."
+            sleep 10  # Attendre un peu plus longtemps pour que le conteneur démarre complètement
             if ! $COMPOSE_CMD ps | grep -q "Up"; then
               echo "Le déploiement a échoué. Vérifiez les logs:"
               $COMPOSE_CMD logs
@@ -133,7 +174,7 @@ jobs:
             fi
             
             # Afficher les informations sur les conteneurs en cours d'exécution
-            echo "Déploiement terminé avec succès!"
+            echo "✅ Déploiement terminé avec succès!"
             $COMPOSE_CMD ps
             
             # Nettoyer les images Docker inutilisées
