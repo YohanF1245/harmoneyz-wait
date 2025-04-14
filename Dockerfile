@@ -1,5 +1,5 @@
 # Étape 1: Construction de l'application
-FROM node:18-alpine as build
+FROM node:18-alpine AS build
 
 # Ajout de labels pour la maintenance
 LABEL maintainer="Harmoneyz Team"
@@ -7,7 +7,7 @@ LABEL description="Page d'attente pour l'application Harmoneyz"
 LABEL version="1.0"
 
 # Définir des variables d'environnement pour npm
-ENV NODE_ENV=production
+ENV NODE_ENV=development
 
 WORKDIR /app
 
@@ -23,7 +23,7 @@ RUN npm ci && \
 COPY . .
 
 # Construction de l'application
-RUN npm run build
+RUN ./node_modules/.bin/vite build
 
 # Étape 2: Servir l'application avec Nginx
 FROM nginx:alpine
