@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  harmoneyz:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "80:80"
+    # Pour la production, utilisez un réseau externe et un proxy reverse comme Traefik
+    # networks:
+    #   - web
+    # labels:
+    #   - "traefik.enable=true"
+    #   - "traefik.http.routers.harmoneyz.rule=Host(`votredomaine.com`)"
+    #   - "traefik.http.routers.harmoneyz.entrypoints=websecure"
+    #   - "traefik.http.routers.harmoneyz.tls.certresolver=myresolver"
+
+# networks:
+#   web:
+#     external: true 

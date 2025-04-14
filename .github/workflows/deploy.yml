@@ -1,0 +1,146 @@
+name: Build and Deploy to OVH VPS
+
+# Déclencher le workflow sur les push vers la branche main
+on:
+  push:
+    branches:
+      - main
+    # Pour optimiser, ne déclencher que sur les changements pertinents
+    paths-ignore:
+      - '**.md'
+      - '.github/**'
+      - '!.github/workflows/**'
+  # Permettre de lancer manuellement le workflow depuis l'interface GitHub
+  workflow_dispatch:
+
+env:
+  # Version de l'image avec date pour le traçage
+  IMAGE_VERSION: ${{ github.sha }}
+
+jobs:
+  deploy:
+    name: Deploy to OVH VPS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add SSH known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Create archive of repository
+        run: |
+          tar -czf harmoneyz-deploy.tar.gz --exclude='.git' --exclude='node_modules' .
+          ls -lah harmoneyz-deploy.tar.gz
+
+      - name: Copy files to VPS and deploy
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          # Copier l'archive vers le VPS
+          scp harmoneyz-deploy.tar.gz $VPS_USER@$VPS_HOST:~/
+
+          # Exécuter le script de déploiement sur le VPS
+          ssh $VPS_USER@$VPS_HOST << 'EOF'
+            set -e  # Arrêter le script en cas d'erreur
+            
+            # Créer répertoire de déploiement s'il n'existe pas
+            mkdir -p ~/harmoneyz
+            cd ~/harmoneyz
+            
+            # Extraire les fichiers de l'archive
+            tar -xzf ~/harmoneyz-deploy.tar.gz
+            
+            # Nettoyer l'archive après extraction
+            rm ~/harmoneyz-deploy.tar.gz
+            
+            # Vérifier quelle version de Docker est disponible
+            if ! command -v docker &> /dev/null; then
+              echo "Docker n'est pas installé. Installation impossible depuis ce script."
+              exit 1
+            fi
+            
+            # Construire l'image Docker localement
+            echo "Construction de l'image Docker..."
+            docker build -t harmoneyz:latest .
+            
+            # Création/mise à jour du fichier docker-compose.yml
+            cat > docker-compose.yml << 'EOCF'
+            version: '3.8'
+            
+            services:
+              harmoneyz:
+                image: harmoneyz:latest
+                restart: always
+                healthcheck:
+                  test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/"]
+                  interval: 30s
+                  timeout: 10s
+                  retries: 3
+                  start_period: 10s
+                ports:
+                  - "80:80"
+                # Limiter les ressources
+                deploy:
+                  resources:
+                    limits:
+                      cpus: '0.5'
+                      memory: 512M
+                logging:
+                  driver: "json-file"
+                  options:
+                    max-size: "10m"
+                    max-file: "3"
+            EOCF
+            
+            # Déterminer quelle version de Docker Compose utiliser
+            if command -v docker compose &> /dev/null; then
+              # Docker Compose V2
+              echo "Utilisation de Docker Compose V2"
+              COMPOSE_CMD="docker compose"
+            elif command -v docker-compose &> /dev/null; then
+              # Docker Compose V1
+              echo "Utilisation de Docker Compose V1"
+              COMPOSE_CMD="docker-compose"
+            else
+              # Installation de Docker Compose
+              echo "Installation de Docker Compose..."
+              sudo curl -L "https://github.com/docker/compose/releases/download/v2.20.3/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+              sudo chmod +x /usr/local/bin/docker-compose
+              COMPOSE_CMD="docker-compose"
+            fi
+            
+            # Arrêter les conteneurs existants
+            $COMPOSE_CMD down || true
+            
+            # Démarrer les nouveaux conteneurs
+            $COMPOSE_CMD up -d
+            
+            # Vérifier que le déploiement a réussi
+            sleep 5
+            if ! $COMPOSE_CMD ps | grep -q "Up"; then
+              echo "Le déploiement a échoué. Vérifiez les logs:"
+              $COMPOSE_CMD logs
+              exit 1
+            fi
+            
+            # Afficher les informations sur les conteneurs en cours d'exécution
+            echo "Déploiement terminé avec succès!"
+            $COMPOSE_CMD ps
+            
+            # Nettoyer les images Docker inutilisées
+            echo "Nettoyage des images Docker inutilisées..."
+            docker image prune -af --filter "until=24h" || true
+            
+            # Afficher l'espace disque disponible
+            echo "Espace disque restant:"
+            df -h /
+          EOF 
