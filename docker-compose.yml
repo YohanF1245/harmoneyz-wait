@@ -2,20 +2,89 @@ version: '3.8'
 
 services:
   harmoneyz:
+    image: harmoneyz:latest
     build:
       context: .
       dockerfile: Dockerfile
     restart: always
-    ports:
-      - "80:80"
+    # Ne pas exposer le port 80 directement, mais via le proxy
+    # ports:
+    #   - "80:80"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    # Limiter les ressources pour éviter une surcharge du VPS
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    # Configuration des logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      - VIRTUAL_HOST=harmoneyz.com,www.harmoneyz.com
+      - LETSENCRYPT_HOST=harmoneyz.com,www.harmoneyz.com
+      - LETSENCRYPT_EMAIL=contact@harmoneyz.com
+    networks:
+      - proxy-network
+    # Les volumes peuvent être décommentés pour la persistance des logs si nécessaire
+    # volumes:
+    #   - ./logs:/var/log/nginx
     # Pour la production, utilisez un réseau externe et un proxy reverse comme Traefik
     # networks:
     #   - web
     # labels:
     #   - "traefik.enable=true"
-    #   - "traefik.http.routers.harmoneyz.rule=Host(`votredomaine.com`)"
+    #   - "traefik.http.routers.harmoneyz.rule=Host(`harmoneyz.com`) || Host(`www.harmoneyz.com`)"
     #   - "traefik.http.routers.harmoneyz.entrypoints=websecure"
     #   - "traefik.http.routers.harmoneyz.tls.certresolver=myresolver"
+
+  # Nginx Proxy pour gestion HTTPS
+  nginx-proxy:
+    image: jwilder/nginx-proxy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - certs:/etc/nginx/certs
+      - vhost:/etc/nginx/vhost.d
+      - html:/usr/share/nginx/html
+    networks:
+      - proxy-network
+
+  # Let's Encrypt companion
+  letsencrypt:
+    image: jrcs/letsencrypt-nginx-proxy-companion
+    restart: always
+    environment:
+      - DEFAULT_EMAIL=contact@harmoneyz.com
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - certs:/etc/nginx/certs
+      - vhost:/etc/nginx/vhost.d
+      - html:/usr/share/nginx/html
+    depends_on:
+      - nginx-proxy
+    networks:
+      - proxy-network
+
+networks:
+  proxy-network:
+    driver: bridge
+
+volumes:
+  certs:
+  vhost:
+  html:
 
 # networks:
 #   web:

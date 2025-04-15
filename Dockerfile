@@ -67,6 +67,10 @@ RUN sed -i 's|pid.*|pid /tmp/nginx/nginx.pid;|' /etc/nginx/nginx.conf && \
     # Vérifier que le fichier a bien été modifié
     grep -q "pid /tmp/nginx/nginx.pid" /etc/nginx/nginx.conf || echo "pid /tmp/nginx/nginx.pid;" >> /etc/nginx/nginx.conf
 
+# S'assurer que le script d'entrée a les bonnes permissions
+RUN chmod +x /docker-entrypoint.sh && \
+    chmod -R +x /docker-entrypoint.d/
+
 # Exposition du port 80
 EXPOSE 80
 
